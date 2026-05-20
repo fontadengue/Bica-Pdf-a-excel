@@ -11,40 +11,74 @@ from openpyxl.utils import get_column_letter
 
 app = Flask(__name__)
 
-# ── Column positions (pdftotext -layout output) ──
-COMP_S, COMP_E = 19, 70
-CONC_S, CONC_E = 70, 118
-DEB_S,  DEB_E  = 118, 138
-CRED_S, CRED_E = 138, 160
-SALDO_S        = 160
+HEADER_RE    = re.compile(r'COMPROBANTE.*CONCEPTO.*DÉBITO')
+DATE_LINE_RE = re.compile(r'^ {0,5}\d{2}/\d{2}/\d{4}')
+CONT_RE      = re.compile(r'^\s{10,}')
 
-DATE_RE   = re.compile(r'^ {0,5}(\d{2}/\d{2}/\d{4}) {2,}')
-HEADER_RE = re.compile(r'COMPROBANTE.*CONCEPTO')
-
-GARBAGE = [
+GARBAGE_STARTS = (
+    'Se presume', 'El monto', 'Excepto Resp', 'el presente',
+    'Textos', 'Los depósitos', '01.04.008', 'Banco Bica', 'www.bcra',
+    'Total cobrado', 'Impuesto computable', 'Saldo Al ',
+    'conforme a los', 'Se encuentran excluidos',
+    'Resumen de Cuenta', 'Cuenta Número', 'Sucursal',
+    'Cantidad de', 'Moneda', 'Clave Bancaria', 'Señor',
+    'Domicilio', 'Hoja N', 'RESUMEN GENERAL', 'SALDO INICIAL',
+    'CRÉDITOS', 'DÉBITOS', 'SALDO FINAL', 'Cta Cte persona',
+    'CUIT/CUIL', 'I.V.A',
+)
+GARBAGE_IN = [
     ' registrado en el Banco si,',
-    ' Se presume conformidad',
-    ' dentro de los sesenta',
-    ' Banco Bica SA',
     'Inscripto - CUIT: 30-71233123',
     '01.04.008',
 ]
 
-def safe(s, a, b=None):
-    if b: return s[a:b].strip() if len(s) > a else ''
-    return s[a:].strip() if len(s) > a else ''
+def detect_fmt(text):
+    ar = len(re.findall(r'\d{1,3}\.\d{3},\d{2}', text[:3000]))
+    us = len(re.findall(r'\d{1,3},\d{3}\.\d{2}', text[:3000]))
+    return 'ar' if ar >= us else 'us'
 
-def parse_num(s):
+def parse_num(s, fmt):
     s = s.strip()
-    if not s: return None
+    if not s:
+        return None
     neg = s.startswith('(') and s.endswith(')')
-    try: return (-1 if neg else 1) * float(s.strip('()').replace(',', ''))
-    except: return None
+    s = s.strip('()')
+    s = s.replace('.', '').replace(',', '.') if fmt == 'ar' else s.replace(',', '')
+    try:
+        return (-1 if neg else 1) * float(s)
+    except:
+        return None
+
+def parse_data_line(line, deb_s, cred_s, saldo_s, fmt):
+    l = line.ljust(saldo_s + 40)
+    debito  = parse_num(l[deb_s:cred_s], fmt)
+    credito = parse_num(l[cred_s:saldo_s], fmt)
+    saldo   = parse_num(l[saldo_s:saldo_s + 25], fmt)
+
+    left = line[:deb_s].rstrip()
+    fecha_m = re.match(r'^\s*(\d{2}/\d{2}/\d{4})\s+', left)
+    if not fecha_m:
+        return None
+    fecha = fecha_m.group(1)
+    rest = left[fecha_m.end():]
+    comp_m = re.match(r'^(\d+)\s+', rest)
+    if comp_m:
+        comp = comp_m.group(1)
+        concepto = rest[comp_m.end():].strip()
+    else:
+        comp = ''
+        concepto = rest.strip()
+
+    return {
+        'fecha': fecha, 'comp': comp, 'concepto': concepto,
+        'debito': debito, 'credito': credito, 'saldo': saldo,
+    }
 
 def clean_concept(t):
-    for g in GARBAGE:
+    for g in GARBAGE_IN:
         i = t.find(g)
-        if i != -1: t = t[:i]
+        if i != -1:
+            t = t[:i]
     return t.strip()
 
 def parse_pdf(file_bytes):
@@ -58,43 +92,47 @@ def parse_pdf(file_bytes):
             capture_output=True, text=True, timeout=120
         )
         if result.returncode != 0:
-            raise RuntimeError('pdftotext falló: ' + result.stderr[:200])
-        lines = result.stdout.split('\n')
+            raise RuntimeError('pdftotext error: ' + result.stderr[:200])
+        text = result.stdout
     finally:
         os.unlink(tmp_path)
 
+    fmt = detect_fmt(text)
+    lines = text.split('\n')
+
+    DEB_S = CRED_S = SALDO_S = None
     rows, current, in_table = [], None, False
 
     for line in lines:
         if HEADER_RE.search(line):
             in_table = True
+            DEB_S   = line.index('DÉBITO')
+            CRED_S  = line.index('CRÉDITO')
+            SALDO_S = line.index('SALDOS')
             continue
+
         if not in_table:
             continue
+
         stripped = line.strip()
         if not stripped or stripped == 'TRANSPORTE':
             continue
+        if any(stripped.startswith(g) for g in GARBAGE_STARTS):
+            continue
 
-        m = DATE_RE.match(line)
-        if m:
+        if DATE_LINE_RE.match(line):
             if current:
                 rows.append(current)
-            current = {
-                'fecha':    m.group(1),
-                'comp':     safe(line, COMP_S, COMP_E),
-                'concepto': safe(line, CONC_S, CONC_E),
-                'debito':   parse_num(safe(line, DEB_S, DEB_E)),
-                'credito':  parse_num(safe(line, CRED_S, SALDO_S)),
-                'saldo':    parse_num(safe(line, SALDO_S)),
-            }
-        elif current and len(line) > CONC_S:
-            extra = safe(line, CONC_S, CONC_E)
+            current = parse_data_line(line, DEB_S, CRED_S, SALDO_S, fmt)
+        elif current and CONT_RE.match(line) and DEB_S:
+            extra = line[:DEB_S].strip()
             if extra:
                 current['concepto'] = (current['concepto'] + ' ' + extra).strip()
 
     if current:
         rows.append(current)
 
+    rows = [r for r in rows if r]
     for r in rows:
         r['concepto'] = clean_concept(r['concepto'])
 
@@ -117,7 +155,7 @@ def build_excel(rows):
     border      = Border(left=thin, right=thin, top=thin, bottom=thin)
 
     headers    = ["Fecha", "Comprobante", "Concepto", "Débito", "Crédito", "Saldo", "Cuenta Contable"]
-    col_widths = [12, 16, 80, 15, 15, 16, 25]
+    col_widths = [12, 14, 70, 15, 15, 16, 25]
 
     for col, (h, w) in enumerate(zip(headers, col_widths), start=1):
         cell = ws.cell(row=1, column=col, value=h)
@@ -138,9 +176,7 @@ def build_excel(rows):
             cell = ws.cell(row=i, column=col, value=val)
             cell.font = Font(name="Arial", size=9)
             cell.border = border
-            if col == 1:
-                cell.alignment = Alignment(horizontal='center', vertical='top')
-            elif col == 2:
+            if col in (1, 2):
                 cell.alignment = Alignment(horizontal='center', vertical='top')
             elif col == 3:
                 cell.fill = fill
@@ -210,11 +246,9 @@ HTML = r"""<!DOCTYPE html>
     --navy: #0f1c2e; --navy2: #1a2f48; --accent: #2a9d8f;
     --light: #f0f4f8; --text: #1a2f48; --muted: #6b7e96;
     --border: #d0dbe8; --white: #ffffff;
-    --green-text: #0f7a6b; --red-text: #c0392b;
-    --red: #fde8e8;
+    --green-text: #0f7a6b; --red-text: #c0392b; --red: #fde8e8;
   }
   body { font-family: 'Sora', sans-serif; background: var(--light); color: var(--text); min-height: 100vh; display: flex; flex-direction: column; align-items: center; padding: 2rem 1rem 4rem; }
-
   #splash { position: fixed; inset: 0; background: var(--navy); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2rem; z-index: 999; transition: opacity 0.5s ease; }
   #splash.hidden { opacity: 0; pointer-events: none; }
   .splash-icon { width: 72px; height: 72px; background: rgba(42,157,143,0.15); border: 2px solid var(--accent); border-radius: 20px; display: flex; align-items: center; justify-content: center; }
@@ -229,7 +263,6 @@ HTML = r"""<!DOCTYPE html>
   .splash-status.err { color: #e76f51; }
   .dot-anim::after { content: ''; animation: dots 1.2s steps(4,end) infinite; }
   @keyframes dots { 0%{content:''} 25%{content:'.'} 50%{content:'..'} 75%{content:'...'} }
-
   #app { width: 100%; display: flex; flex-direction: column; align-items: center; }
   header { width: 100%; max-width: 680px; margin-bottom: 2.5rem; }
   .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 0.4rem; }
@@ -249,7 +282,7 @@ HTML = r"""<!DOCTYPE html>
   .file-info.visible { display: flex; }
   .file-name { font-family: 'DM Mono', monospace; font-weight: 500; color: var(--navy); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .file-size { color: var(--muted); font-size: 0.78rem; }
-  .btn { display: block; width: 100%; margin-top: 1.5rem; padding: 0.9rem; background: var(--navy); color: var(--white); border: none; border-radius: 10px; font-family: 'Sora', sans-serif; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background 0.15s, transform 0.1s; }
+  .btn { display: block; width: 100%; margin-top: 1.5rem; padding: 0.9rem; background: var(--navy); color: var(--white); border: none; border-radius: 10px; font-family: 'Sora', sans-serif; font-size: 0.95rem; font-weight: 600; cursor: pointer; transition: background 0.15s; }
   .btn:hover { background: var(--navy2); }
   .btn:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; }
   .progress-wrap { display: none; margin-top: 1.5rem; }
@@ -278,7 +311,6 @@ HTML = r"""<!DOCTYPE html>
 </style>
 </head>
 <body>
-
 <div id="splash">
   <div class="splash-icon">
     <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
@@ -290,7 +322,6 @@ HTML = r"""<!DOCTYPE html>
   <button id="startBtn" onclick="iniciar()">Iniciar</button>
   <div class="splash-status" id="splashStatus"></div>
 </div>
-
 <div id="app" style="display:none">
   <header>
     <div class="logo">
@@ -303,7 +334,6 @@ HTML = r"""<!DOCTYPE html>
       </div>
     </div>
   </header>
-
   <div class="card">
     <div class="drop-zone" id="dropZone">
       <input type="file" id="fileInput" accept=".pdf" />
@@ -343,9 +373,8 @@ HTML = r"""<!DOCTYPE html>
       </a>
     </div>
   </div>
-  <div class="note">Compatible con extractos del Banco BICA SA (formato Reporting Services)</div>
+  <div class="note">Compatible con extractos del Banco BICA SA · detecta formato automáticamente</div>
 </div>
-
 <script>
 async function iniciar() {
   const btn = document.getElementById('startBtn');
@@ -374,92 +403,69 @@ async function iniciar() {
   btn.disabled = false;
   btn.textContent = 'Reintentar';
 }
-
-function fmtSize(b) { return b < 1048576 ? (b/1024).toFixed(0)+' KB' : (b/1048576).toFixed(1)+' MB'; }
+function fmtSize(b) { return b<1048576?(b/1024).toFixed(0)+' KB':(b/1048576).toFixed(1)+' MB'; }
 function fmtNum(n) { return new Intl.NumberFormat('es-AR',{minimumFractionDigits:2}).format(n); }
-
-const dropZone   = document.getElementById('dropZone');
-const fileInput  = document.getElementById('fileInput');
-const convertBtn = document.getElementById('convertBtn');
-const progressWrap = document.getElementById('progressWrap');
-const progressFill = document.getElementById('progressFill');
-const progressText = document.getElementById('progressText');
-const progressPct  = document.getElementById('progressPct');
-const resultEl   = document.getElementById('result');
-const errorBox   = document.getElementById('errorBox');
-const downloadBtn= document.getElementById('downloadBtn');
-let selectedFile = null;
-
-function setFile(file) {
-  if (!file || !file.name.toLowerCase().endsWith('.pdf')) { showError('Solo se aceptan archivos .pdf'); return; }
-  selectedFile = file;
-  document.getElementById('fileName').textContent = file.name;
-  document.getElementById('fileSize').textContent = fmtSize(file.size);
+const dropZone=document.getElementById('dropZone'),fileInput=document.getElementById('fileInput'),
+      convertBtn=document.getElementById('convertBtn'),progressWrap=document.getElementById('progressWrap'),
+      progressFill=document.getElementById('progressFill'),progressText=document.getElementById('progressText'),
+      progressPct=document.getElementById('progressPct'),resultEl=document.getElementById('result'),
+      errorBox=document.getElementById('errorBox'),downloadBtn=document.getElementById('downloadBtn');
+let selectedFile=null;
+function setFile(file){
+  if(!file||!file.name.toLowerCase().endsWith('.pdf')){showError('Solo se aceptan archivos .pdf');return;}
+  selectedFile=file;
+  document.getElementById('fileName').textContent=file.name;
+  document.getElementById('fileSize').textContent=fmtSize(file.size);
   document.getElementById('fileInfo').classList.add('visible');
-  convertBtn.disabled = false;
+  convertBtn.disabled=false;
   resultEl.classList.remove('visible');
   errorBox.classList.remove('visible');
 }
-function showError(msg) { errorBox.textContent = msg; errorBox.classList.add('visible'); }
-function animateProgress(target, duration, label) {
-  progressText.textContent = label;
-  const start = parseFloat(progressFill.style.width) || 0;
-  const t0 = performance.now();
-  function step(now) {
-    const t = Math.min((now-t0)/duration, 1);
-    const e = t<0.5?2*t*t:-1+(4-2*t)*t;
-    const cur = start + (target-start)*e;
-    progressFill.style.width = cur+'%';
-    progressPct.textContent = Math.round(cur)+'%';
-    if (t<1) requestAnimationFrame(step);
+function showError(msg){errorBox.textContent=msg;errorBox.classList.add('visible');}
+function animateProgress(target,duration,label){
+  progressText.textContent=label;
+  const start=parseFloat(progressFill.style.width)||0,t0=performance.now();
+  function step(now){
+    const t=Math.min((now-t0)/duration,1),e=t<0.5?2*t*t:-1+(4-2*t)*t;
+    const cur=start+(target-start)*e;
+    progressFill.style.width=cur+'%';progressPct.textContent=Math.round(cur)+'%';
+    if(t<1)requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
 }
-
-fileInput.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
-dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
-dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
-
-convertBtn.addEventListener('click', async () => {
-  if (!selectedFile) return;
-  errorBox.classList.remove('visible');
-  resultEl.classList.remove('visible');
-  convertBtn.disabled = true;
-  progressWrap.classList.add('visible');
-  progressFill.style.width = '0%';
-  animateProgress(30, 400, 'Leyendo PDF...');
-  const fd = new FormData();
-  fd.append('file', selectedFile);
-  setTimeout(() => animateProgress(65, 1500, 'Extrayendo movimientos...'), 500);
-  try {
-    const resp = await fetch('/convert', { method: 'POST', body: fd });
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({}));
-      throw new Error(err.error || 'Error en el servidor (HTTP '+resp.status+')');
-    }
-    animateProgress(90, 400, 'Generando Excel...');
-    const stats = JSON.parse(resp.headers.get('X-Stats') || '{}');
-    const blob  = await resp.blob();
-    setTimeout(() => {
-      animateProgress(100, 300, 'Listo!');
-      setTimeout(() => {
-        progressWrap.classList.remove('visible');
-        convertBtn.disabled = false;
-        const url = URL.createObjectURL(blob);
-        downloadBtn.href = url;
-        downloadBtn.download = selectedFile.name.replace(/\.pdf$/i,'')+'_Movimientos.xlsx';
-        document.getElementById('statTotal').textContent = stats.total || '—';
-        document.getElementById('statCred').textContent  = stats.creditos ? fmtNum(stats.creditos) : '—';
-        document.getElementById('statDeb').textContent   = stats.debitos  ? fmtNum(stats.debitos)  : '—';
-        resultEl.classList.add('visible');
-        downloadBtn.click();
-      }, 400);
-    }, 600);
-  } catch(err) {
-    progressWrap.classList.remove('visible');
-    convertBtn.disabled = false;
-    showError('Error: ' + err.message);
+fileInput.addEventListener('change',e=>{if(e.target.files[0])setFile(e.target.files[0]);});
+dropZone.addEventListener('dragover',e=>{e.preventDefault();dropZone.classList.add('drag-over');});
+dropZone.addEventListener('dragleave',()=>dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop',e=>{e.preventDefault();dropZone.classList.remove('drag-over');if(e.dataTransfer.files[0])setFile(e.dataTransfer.files[0]);});
+convertBtn.addEventListener('click',async()=>{
+  if(!selectedFile)return;
+  errorBox.classList.remove('visible');resultEl.classList.remove('visible');
+  convertBtn.disabled=true;progressWrap.classList.add('visible');progressFill.style.width='0%';
+  animateProgress(30,400,'Leyendo PDF...');
+  const fd=new FormData();fd.append('file',selectedFile);
+  setTimeout(()=>animateProgress(65,1500,'Extrayendo movimientos...'),500);
+  try{
+    const resp=await fetch('/convert',{method:'POST',body:fd});
+    if(!resp.ok){const err=await resp.json().catch(()=>({}));throw new Error(err.error||'Error HTTP '+resp.status);}
+    animateProgress(90,400,'Generando Excel...');
+    const stats=JSON.parse(resp.headers.get('X-Stats')||'{}');
+    const blob=await resp.blob();
+    setTimeout(()=>{
+      animateProgress(100,300,'Listo!');
+      setTimeout(()=>{
+        progressWrap.classList.remove('visible');convertBtn.disabled=false;
+        const url=URL.createObjectURL(blob);
+        downloadBtn.href=url;
+        downloadBtn.download=selectedFile.name.replace(/\.pdf$/i,'')+'_Movimientos.xlsx';
+        document.getElementById('statTotal').textContent=stats.total||'—';
+        document.getElementById('statCred').textContent=stats.creditos?fmtNum(stats.creditos):'—';
+        document.getElementById('statDeb').textContent=stats.debitos?fmtNum(stats.debitos):'—';
+        resultEl.classList.add('visible');downloadBtn.click();
+      },400);
+    },600);
+  }catch(err){
+    progressWrap.classList.remove('visible');convertBtn.disabled=false;
+    showError('Error: '+err.message);
   }
 });
 </script>
