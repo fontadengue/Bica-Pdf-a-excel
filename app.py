@@ -1,7 +1,6 @@
 import re
 import io
-import webbrowser
-import threading
+import os
 from flask import Flask, request, send_file, jsonify
 import pdfplumber
 from openpyxl import Workbook
@@ -247,390 +246,280 @@ HTML = r"""<!DOCTYPE html>
     padding: 2rem 1rem 4rem;
   }
 
-  header {
-    width: 100%;
-    max-width: 680px;
-    margin-bottom: 2.5rem;
-  }
-
-  .logo {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    margin-bottom: 0.4rem;
-  }
-
-  .logo-icon {
-    width: 40px; height: 40px;
+  /* ── SPLASH ── */
+  #splash {
+    position: fixed; inset: 0;
     background: var(--navy);
-    border-radius: 10px;
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    gap: 2rem; z-index: 999;
+    transition: opacity 0.5s ease;
+  }
+  #splash.hidden { opacity: 0; pointer-events: none; }
+
+  .splash-icon {
+    width: 72px; height: 72px;
+    background: rgba(42,157,143,0.15);
+    border: 2px solid var(--accent);
+    border-radius: 20px;
     display: flex; align-items: center; justify-content: center;
   }
+  .splash-icon svg { width: 36px; height: 36px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-  .logo-icon svg { width: 22px; height: 22px; fill: var(--accent); }
-
-  h1 {
-    font-size: 1.5rem;
-    font-weight: 600;
-    color: var(--navy);
-    letter-spacing: -0.02em;
-  }
-
-  .subtitle {
-    font-size: 0.85rem;
-    color: var(--muted);
-    font-weight: 300;
-    margin-top: 2px;
-  }
-
-  .card {
-    width: 100%;
-    max-width: 680px;
-    background: var(--white);
-    border: 1px solid var(--border);
-    border-radius: 16px;
-    padding: 2rem;
-  }
-
-  .drop-zone {
-    border: 2px dashed var(--border);
-    border-radius: 12px;
-    padding: 3rem 2rem;
-    text-align: center;
-    cursor: pointer;
-    transition: all 0.2s ease;
-    position: relative;
-    background: var(--light);
-  }
-
-  .drop-zone:hover, .drop-zone.drag-over {
-    border-color: var(--accent);
-    background: #eaf7f5;
-  }
-
-  .drop-zone input[type="file"] {
-    position: absolute; inset: 0;
-    opacity: 0; cursor: pointer; width: 100%; height: 100%;
-  }
-
-  .drop-icon {
-    width: 52px; height: 52px;
-    margin: 0 auto 1rem;
-    background: var(--navy);
-    border-radius: 12px;
-    display: flex; align-items: center; justify-content: center;
-  }
-
-  .drop-icon svg { width: 28px; height: 28px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
-
-  .drop-label {
-    font-size: 1rem;
-    font-weight: 600;
-    color: var(--navy);
-    margin-bottom: 0.3rem;
-  }
-
-  .drop-hint {
-    font-size: 0.8rem;
-    color: var(--muted);
-    font-family: 'DM Mono', monospace;
-  }
-
-  .file-info {
-    display: none;
-    margin-top: 1.2rem;
-    padding: 0.75rem 1rem;
-    background: var(--light);
-    border-radius: 8px;
-    border: 1px solid var(--border);
-    display: none;
-    align-items: center;
-    gap: 10px;
-    font-size: 0.85rem;
-  }
-
-  .file-info.visible { display: flex; }
-
-  .file-name {
-    font-family: 'DM Mono', monospace;
-    font-weight: 500;
-    color: var(--navy);
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .file-size {
-    color: var(--muted);
-    font-size: 0.78rem;
-  }
-
-  .btn {
-    display: block;
-    width: 100%;
-    margin-top: 1.5rem;
-    padding: 0.9rem;
-    background: var(--navy);
+  .splash-title {
+    font-size: 1.6rem; font-weight: 600;
     color: var(--white);
-    border: none;
-    border-radius: 10px;
-    font-family: 'Sora', sans-serif;
-    font-size: 0.95rem;
-    font-weight: 600;
-    cursor: pointer;
-    letter-spacing: 0.01em;
-    transition: background 0.15s ease, transform 0.1s ease;
+    letter-spacing: -0.02em;
+    text-align: center;
+  }
+  .splash-sub {
+    font-size: 0.85rem; color: rgba(255,255,255,0.45);
+    font-family: 'DM Mono', monospace;
+    text-align: center;
   }
 
+  #startBtn {
+    padding: 0.9rem 3rem;
+    background: var(--accent);
+    color: var(--white);
+    border: none; border-radius: 12px;
+    font-family: 'Sora', sans-serif;
+    font-size: 1rem; font-weight: 600;
+    cursor: pointer; letter-spacing: 0.01em;
+    transition: background 0.15s, transform 0.1s;
+    min-width: 200px;
+  }
+  #startBtn:hover { background: #238f82; }
+  #startBtn:active { transform: scale(0.98); }
+  #startBtn:disabled { background: #1a5c55; cursor: default; }
+
+  .splash-status {
+    font-size: 0.78rem;
+    font-family: 'DM Mono', monospace;
+    color: rgba(255,255,255,0.35);
+    min-height: 1.2em;
+    text-align: center;
+  }
+  .splash-status.ok   { color: var(--accent); }
+  .splash-status.err  { color: #e76f51; }
+
+  .dot-anim::after {
+    content: '';
+    animation: dots 1.2s steps(4, end) infinite;
+  }
+  @keyframes dots {
+    0%   { content: ''; }
+    25%  { content: '.'; }
+    50%  { content: '..'; }
+    75%  { content: '...'; }
+  }
+
+  /* ── APP ── */
+  #app { width: 100%; display: flex; flex-direction: column; align-items: center; }
+
+  header { width: 100%; max-width: 680px; margin-bottom: 2.5rem; }
+
+  .logo { display: flex; align-items: center; gap: 12px; margin-bottom: 0.4rem; }
+  .logo-icon { width: 40px; height: 40px; background: var(--navy); border-radius: 10px; display: flex; align-items: center; justify-content: center; }
+  .logo-icon svg { width: 22px; height: 22px; fill: var(--accent); }
+  h1 { font-size: 1.5rem; font-weight: 600; color: var(--navy); letter-spacing: -0.02em; }
+  .subtitle { font-size: 0.85rem; color: var(--muted); font-weight: 300; margin-top: 2px; }
+
+  .card { width: 100%; max-width: 680px; background: var(--white); border: 1px solid var(--border); border-radius: 16px; padding: 2rem; }
+
+  .drop-zone { border: 2px dashed var(--border); border-radius: 12px; padding: 3rem 2rem; text-align: center; cursor: pointer; transition: all 0.2s ease; position: relative; background: var(--light); }
+  .drop-zone:hover, .drop-zone.drag-over { border-color: var(--accent); background: #eaf7f5; }
+  .drop-zone input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; width: 100%; height: 100%; }
+  .drop-icon { width: 52px; height: 52px; margin: 0 auto 1rem; background: var(--navy); border-radius: 12px; display: flex; align-items: center; justify-content: center; }
+  .drop-icon svg { width: 28px; height: 28px; fill: none; stroke: var(--accent); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .drop-label { font-size: 1rem; font-weight: 600; color: var(--navy); margin-bottom: 0.3rem; }
+  .drop-hint { font-size: 0.8rem; color: var(--muted); font-family: 'DM Mono', monospace; }
+
+  .file-info { display: none; margin-top: 1.2rem; padding: 0.75rem 1rem; background: var(--light); border-radius: 8px; border: 1px solid var(--border); align-items: center; gap: 10px; font-size: 0.85rem; }
+  .file-info.visible { display: flex; }
+  .file-name { font-family: 'DM Mono', monospace; font-weight: 500; color: var(--navy); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-size { color: var(--muted); font-size: 0.78rem; }
+
+  .btn { display: block; width: 100%; margin-top: 1.5rem; padding: 0.9rem; background: var(--navy); color: var(--white); border: none; border-radius: 10px; font-family: 'Sora', sans-serif; font-size: 0.95rem; font-weight: 600; cursor: pointer; letter-spacing: 0.01em; transition: background 0.15s, transform 0.1s; }
   .btn:hover { background: var(--navy2); }
   .btn:active { transform: scale(0.99); }
   .btn:disabled { background: var(--border); color: var(--muted); cursor: not-allowed; transform: none; }
 
-  .progress-wrap {
-    display: none;
-    margin-top: 1.5rem;
-  }
-
+  .progress-wrap { display: none; margin-top: 1.5rem; }
   .progress-wrap.visible { display: block; }
+  .progress-label { font-size: 0.82rem; color: var(--muted); margin-bottom: 0.5rem; font-family: 'DM Mono', monospace; display: flex; justify-content: space-between; }
+  .progress-bar-bg { height: 6px; background: var(--light); border-radius: 99px; overflow: hidden; border: 1px solid var(--border); }
+  .progress-bar-fill { height: 100%; background: linear-gradient(90deg, var(--accent), #48cfc0); border-radius: 99px; width: 0%; transition: width 0.3s ease; }
 
-  .progress-label {
-    font-size: 0.82rem;
-    color: var(--muted);
-    margin-bottom: 0.5rem;
-    font-family: 'DM Mono', monospace;
-    display: flex;
-    justify-content: space-between;
-  }
-
-  .progress-bar-bg {
-    height: 6px;
-    background: var(--light);
-    border-radius: 99px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-
-  .progress-bar-fill {
-    height: 100%;
-    background: linear-gradient(90deg, var(--accent), #48cfc0);
-    border-radius: 99px;
-    width: 0%;
-    transition: width 0.3s ease;
-  }
-
-  .result {
-    display: none;
-    margin-top: 1.5rem;
-    border-radius: 10px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-  }
-
+  .result { display: none; margin-top: 1.5rem; border-radius: 10px; overflow: hidden; border: 1px solid var(--border); }
   .result.visible { display: block; }
-
-  .result-header {
-    background: var(--navy);
-    padding: 0.9rem 1.2rem;
-    display: flex;
-    align-items: center;
-    gap: 10px;
-  }
-
+  .result-header { background: var(--navy); padding: 0.9rem 1.2rem; display: flex; align-items: center; gap: 10px; }
   .result-header svg { width: 18px; height: 18px; fill: var(--accent); flex-shrink: 0; }
-
-  .result-title {
-    font-size: 0.9rem;
-    font-weight: 600;
-    color: var(--white);
-    flex: 1;
-  }
-
-  .stats {
-    display: grid;
-    grid-template-columns: repeat(3, 1fr);
-    gap: 0;
-    border-top: 1px solid var(--border);
-  }
-
-  .stat {
-    padding: 1rem 1.2rem;
-    border-right: 1px solid var(--border);
-  }
+  .result-title { font-size: 0.9rem; font-weight: 600; color: var(--white); flex: 1; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 0; border-top: 1px solid var(--border); }
+  .stat { padding: 1rem 1.2rem; border-right: 1px solid var(--border); }
   .stat:last-child { border-right: none; }
-
-  .stat-label {
-    font-size: 0.72rem;
-    color: var(--muted);
-    font-family: 'DM Mono', monospace;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    margin-bottom: 4px;
-  }
-
-  .stat-value {
-    font-size: 1.1rem;
-    font-weight: 600;
-    color: var(--navy);
-    font-family: 'DM Mono', monospace;
-  }
-
+  .stat-label { font-size: 0.72rem; color: var(--muted); font-family: 'DM Mono', monospace; text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 4px; }
+  .stat-value { font-size: 1.1rem; font-weight: 600; color: var(--navy); font-family: 'DM Mono', monospace; }
   .stat-value.green { color: var(--green-text); }
   .stat-value.red { color: var(--red-text); }
 
-  .download-btn {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    width: calc(100% - 2.4rem);
-    margin: 1rem 1.2rem 1.2rem;
-    padding: 0.75rem;
-    background: var(--accent);
-    color: var(--white);
-    border: none;
-    border-radius: 8px;
-    font-family: 'Sora', sans-serif;
-    font-size: 0.9rem;
-    font-weight: 600;
-    cursor: pointer;
-    text-decoration: none;
-    transition: background 0.15s ease;
-  }
+  .download-btn { display: flex; align-items: center; justify-content: center; gap: 8px; width: calc(100% - 2.4rem); margin: 1rem 1.2rem 1.2rem; padding: 0.75rem; background: var(--accent); color: var(--white); border: none; border-radius: 8px; font-family: 'Sora', sans-serif; font-size: 0.9rem; font-weight: 600; cursor: pointer; text-decoration: none; transition: background 0.15s; }
   .download-btn:hover { background: #238f82; }
   .download-btn svg { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
-  .error {
-    display: none;
-    margin-top: 1.2rem;
-    padding: 0.85rem 1rem;
-    background: var(--red);
-    border: 1px solid #f5c6c6;
-    border-radius: 8px;
-    font-size: 0.85rem;
-    color: var(--red-text);
-    font-family: 'DM Mono', monospace;
-  }
+  .error { display: none; margin-top: 1.2rem; padding: 0.85rem 1rem; background: var(--red); border: 1px solid #f5c6c6; border-radius: 8px; font-size: 0.85rem; color: var(--red-text); font-family: 'DM Mono', monospace; }
   .error.visible { display: block; }
 
-  .note {
-    max-width: 680px;
-    margin-top: 1.5rem;
-    font-size: 0.78rem;
-    color: var(--muted);
-    text-align: center;
-    line-height: 1.6;
-    font-family: 'DM Mono', monospace;
-  }
+  .note { max-width: 680px; margin-top: 1.5rem; font-size: 0.78rem; color: var(--muted); text-align: center; line-height: 1.6; font-family: 'DM Mono', monospace; }
 </style>
 </head>
 <body>
 
-<header>
-  <div class="logo">
-    <div class="logo-icon">
-      <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-    </div>
-    <div>
-      <h1>BICA PDF → Excel</h1>
-      <div class="subtitle">Extracto bancario · Banco BICA SA</div>
-    </div>
+<!-- SPLASH -->
+<div id="splash">
+  <div class="splash-icon">
+    <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
   </div>
-</header>
-
-<div class="card">
-  <div class="drop-zone" id="dropZone">
-    <input type="file" id="fileInput" accept=".pdf" />
-    <div class="drop-icon">
-      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
-    </div>
-    <div class="drop-label">Arrastrá el PDF acá</div>
-    <div class="drop-hint">o hacé click para seleccionar · solo .pdf</div>
+  <div>
+    <div class="splash-title">BICA PDF → Excel</div>
+    <div class="splash-sub" style="margin-top:6px">Extracto bancario · Banco BICA SA</div>
   </div>
-
-  <div class="file-info" id="fileInfo">
-    <svg style="width:16px;height:16px;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-    <span class="file-name" id="fileName"></span>
-    <span class="file-size" id="fileSize"></span>
-  </div>
-
-  <div class="error" id="errorBox"></div>
-
-  <button class="btn" id="convertBtn" disabled>Convertir a Excel</button>
-
-  <div class="progress-wrap" id="progressWrap">
-    <div class="progress-label">
-      <span id="progressText">Procesando PDF...</span>
-      <span id="progressPct">0%</span>
-    </div>
-    <div class="progress-bar-bg">
-      <div class="progress-bar-fill" id="progressFill"></div>
-    </div>
-  </div>
-
-  <div class="result" id="result">
-    <div class="result-header">
-      <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
-      <span class="result-title">Excel generado correctamente</span>
-    </div>
-    <div class="stats">
-      <div class="stat">
-        <div class="stat-label">Movimientos</div>
-        <div class="stat-value" id="statTotal">—</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Total créditos</div>
-        <div class="stat-value green" id="statCred">—</div>
-      </div>
-      <div class="stat">
-        <div class="stat-label">Total débitos</div>
-        <div class="stat-value red" id="statDeb">—</div>
-      </div>
-    </div>
-    <a class="download-btn" id="downloadBtn" href="#" download>
-      <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
-      Descargar Excel
-    </a>
-  </div>
+  <button id="startBtn" onclick="iniciar()">Iniciar</button>
+  <div class="splash-status" id="splashStatus"></div>
 </div>
 
-<div class="note">
-  Procesamiento local · el PDF no sale de tu computadora<br>
-  Compatible con extractos del Banco BICA SA (formato Reporting Services)
+<!-- APP -->
+<div id="app" style="display:none">
+  <header>
+    <div class="logo">
+      <div class="logo-icon">
+        <svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
+      </div>
+      <div>
+        <h1>BICA PDF → Excel</h1>
+        <div class="subtitle">Extracto bancario · Banco BICA SA</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="card">
+    <div class="drop-zone" id="dropZone">
+      <input type="file" id="fileInput" accept=".pdf" />
+      <div class="drop-icon">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="drop-label">Arrastrá el PDF acá</div>
+      <div class="drop-hint">o hacé click para seleccionar · solo .pdf</div>
+    </div>
+
+    <div class="file-info" id="fileInfo">
+      <svg style="width:16px;height:16px;flex-shrink:0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <span class="file-name" id="fileName"></span>
+      <span class="file-size" id="fileSize"></span>
+    </div>
+
+    <div class="error" id="errorBox"></div>
+
+    <button class="btn" id="convertBtn" disabled>Convertir a Excel</button>
+
+    <div class="progress-wrap" id="progressWrap">
+      <div class="progress-label">
+        <span id="progressText">Procesando PDF...</span>
+        <span id="progressPct">0%</span>
+      </div>
+      <div class="progress-bar-bg">
+        <div class="progress-bar-fill" id="progressFill"></div>
+      </div>
+    </div>
+
+    <div class="result" id="result">
+      <div class="result-header">
+        <svg viewBox="0 0 24 24"><path d="M9 11l3 3L22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+        <span class="result-title">Excel generado correctamente</span>
+      </div>
+      <div class="stats">
+        <div class="stat"><div class="stat-label">Movimientos</div><div class="stat-value" id="statTotal">—</div></div>
+        <div class="stat"><div class="stat-label">Total créditos</div><div class="stat-value green" id="statCred">—</div></div>
+        <div class="stat"><div class="stat-label">Total débitos</div><div class="stat-value red" id="statDeb">—</div></div>
+      </div>
+      <a class="download-btn" id="downloadBtn" href="#" download>
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+        Descargar Excel
+      </a>
+    </div>
+  </div>
+
+  <div class="note">
+    Procesamiento local · el PDF no sale de tu computadora<br>
+    Compatible con extractos del Banco BICA SA (formato Reporting Services)
+  </div>
 </div>
 
 <script>
-const dropZone   = document.getElementById('dropZone');
-const fileInput  = document.getElementById('fileInput');
-const fileInfo   = document.getElementById('fileInfo');
-const fileName   = document.getElementById('fileName');
-const fileSize   = document.getElementById('fileSize');
-const convertBtn = document.getElementById('convertBtn');
-const progressWrap = document.getElementById('progressWrap');
-const progressFill = document.getElementById('progressFill');
-const progressText = document.getElementById('progressText');
-const progressPct  = document.getElementById('progressPct');
-const resultEl   = document.getElementById('result');
-const errorBox   = document.getElementById('errorBox');
-const downloadBtn= document.getElementById('downloadBtn');
+async function iniciar() {
+  const btn    = document.getElementById('startBtn');
+  const status = document.getElementById('splashStatus');
 
-let selectedFile = null;
+  btn.disabled = true;
+  status.className = 'splash-status dot-anim';
+  status.textContent = 'Iniciando servidor';
 
+  let intentos = 0;
+  const maxIntentos = 20;
+
+  while (intentos < maxIntentos) {
+    try {
+      const r = await fetch('/ping', { cache: 'no-store' });
+      if (r.ok) {
+        status.className = 'splash-status ok';
+        status.textContent = '✓ Servidor listo';
+        await new Promise(res => setTimeout(res, 600));
+        const splash = document.getElementById('splash');
+        splash.classList.add('hidden');
+        document.getElementById('app').style.display = 'flex';
+        setTimeout(() => splash.remove(), 600);
+        return;
+      }
+    } catch(e) {}
+    intentos++;
+    await new Promise(res => setTimeout(res, 2000));
+  }
+
+  status.className = 'splash-status err';
+  status.textContent = 'No se pudo conectar. Reintentá.';
+  btn.disabled = false;
+  btn.textContent = 'Reintentar';
+}
+
+// ── App logic ──
 function fmtSize(b) {
   if (b < 1024) return b + ' B';
   if (b < 1024*1024) return (b/1024).toFixed(0) + ' KB';
   return (b/1024/1024).toFixed(1) + ' MB';
 }
-
 function fmtNum(n) {
   return new Intl.NumberFormat('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2}).format(n);
 }
 
+const dropZone    = document.getElementById('dropZone');
+const fileInput   = document.getElementById('fileInput');
+const fileInfo    = document.getElementById('fileInfo');
+const fileName    = document.getElementById('fileName');
+const fileSize    = document.getElementById('fileSize');
+const convertBtn  = document.getElementById('convertBtn');
+const progressWrap= document.getElementById('progressWrap');
+const progressFill= document.getElementById('progressFill');
+const progressText= document.getElementById('progressText');
+const progressPct = document.getElementById('progressPct');
+const resultEl    = document.getElementById('result');
+const errorBox    = document.getElementById('errorBox');
+const downloadBtn = document.getElementById('downloadBtn');
+
+let selectedFile = null;
+
 function setFile(file) {
-  if (!file || !file.name.endsWith('.pdf')) {
-    showError('Solo se aceptan archivos .pdf');
-    return;
-  }
+  if (!file || !file.name.endsWith('.pdf')) { showError('Solo se aceptan archivos .pdf'); return; }
   selectedFile = file;
   fileName.textContent = file.name;
   fileSize.textContent = fmtSize(file.size);
@@ -640,10 +529,7 @@ function setFile(file) {
   errorBox.classList.remove('visible');
 }
 
-function showError(msg) {
-  errorBox.textContent = msg;
-  errorBox.classList.add('visible');
-}
+function showError(msg) { errorBox.textContent = msg; errorBox.classList.add('visible'); }
 
 function animateProgress(targetPct, duration, label) {
   progressText.textContent = label;
@@ -651,28 +537,20 @@ function animateProgress(targetPct, duration, label) {
   const diff = targetPct - start;
   const startTime = performance.now();
   function step(now) {
-    const elapsed = now - startTime;
-    const t = Math.min(elapsed / duration, 1);
+    const t = Math.min((now - startTime) / duration, 1);
     const ease = t < 0.5 ? 2*t*t : -1+(4-2*t)*t;
-    const current = start + diff * ease;
-    progressFill.style.width = current + '%';
-    progressPct.textContent = Math.round(current) + '%';
+    const cur = start + diff * ease;
+    progressFill.style.width = cur + '%';
+    progressPct.textContent = Math.round(cur) + '%';
     if (t < 1) requestAnimationFrame(step);
   }
   requestAnimationFrame(step);
 }
 
-fileInput.addEventListener('change', e => {
-  if (e.target.files[0]) setFile(e.target.files[0]);
-});
-
+fileInput.addEventListener('change', e => { if (e.target.files[0]) setFile(e.target.files[0]); });
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
-dropZone.addEventListener('drop', e => {
-  e.preventDefault();
-  dropZone.classList.remove('drag-over');
-  if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
-});
+dropZone.addEventListener('drop', e => { e.preventDefault(); dropZone.classList.remove('drag-over'); if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]); });
 
 convertBtn.addEventListener('click', async () => {
   if (!selectedFile) return;
@@ -681,47 +559,31 @@ convertBtn.addEventListener('click', async () => {
   convertBtn.disabled = true;
   progressWrap.classList.add('visible');
   progressFill.style.width = '0%';
-
   animateProgress(30, 400, 'Leyendo PDF...');
-
   const formData = new FormData();
   formData.append('file', selectedFile);
-
   setTimeout(() => animateProgress(65, 1200, 'Extrayendo movimientos...'), 500);
-
   try {
     const resp = await fetch('/convert', { method: 'POST', body: formData });
-
-    if (!resp.ok) {
-      const err = await resp.json().catch(() => ({error: 'Error desconocido'}));
-      throw new Error(err.error || 'Error en el servidor');
-    }
-
+    if (!resp.ok) { const err = await resp.json().catch(() => ({error:'Error desconocido'})); throw new Error(err.error || 'Error en el servidor'); }
     animateProgress(90, 400, 'Generando Excel...');
-
     const stats = JSON.parse(resp.headers.get('X-Stats') || '{}');
     const blob  = await resp.blob();
-
     setTimeout(() => {
       animateProgress(100, 300, 'Listo!');
       setTimeout(() => {
         progressWrap.classList.remove('visible');
         convertBtn.disabled = false;
-
         const url = URL.createObjectURL(blob);
         downloadBtn.href = url;
-        const baseName = selectedFile.name.replace(/\.pdf$/i, '');
-        downloadBtn.download = baseName + '_Movimientos.xlsx';
-
+        downloadBtn.download = selectedFile.name.replace(/\.pdf$/i, '') + '_Movimientos.xlsx';
         document.getElementById('statTotal').textContent = stats.total || '—';
         document.getElementById('statCred').textContent  = stats.creditos ? fmtNum(stats.creditos) : '—';
         document.getElementById('statDeb').textContent   = stats.debitos  ? fmtNum(stats.debitos)  : '—';
-
         resultEl.classList.add('visible');
         downloadBtn.click();
       }, 400);
     }, 600);
-
   } catch(err) {
     progressWrap.classList.remove('visible');
     convertBtn.disabled = false;
@@ -732,6 +594,10 @@ convertBtn.addEventListener('click', async () => {
 </body>
 </html>
 """
+
+@app.route('/ping')
+def ping():
+    return jsonify({'status': 'ok'})
 
 @app.route('/')
 def index():
@@ -773,15 +639,6 @@ def convert():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-def open_browser():
-    import time
-    time.sleep(1)
-    webbrowser.open('http://localhost:5050')
-
 if __name__ == '__main__':
-    print("=" * 55)
-    print("  BICA PDF → Excel  |  http://localhost:5050")
-    print("  Cerrá esta ventana para detener el servidor")
-    print("=" * 55)
-    threading.Thread(target=open_browser, daemon=True).start()
-    app.run(host='0.0.0.0', port=5050, debug=False)
+    port = int(os.environ.get('PORT', 5050))
+    app.run(host='0.0.0.0', port=port, debug=False)
